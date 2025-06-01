@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <audio id="notification-sound" src="DING.WAV" preload="auto"></audio>
+    <title>AMAZING NAME</title>
+    <script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.2.0/firebase-app.js";
+import { getDatabase, ref, push, set, onValue, update } from "https://www.gstatic.com/firebasejs/11.2.0/firebase-database.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDz4tH_1ruK5pOFTImfuWJ2fkFXcrGqjI8",
+  authDomain: "fzhiuezhyegzihgru.firebaseapp.com",
+  databaseURL: "https://fzhiuezhyegzihgru-default-rtdb.firebaseio.com",
+  projectId: "fzhiuezhyegzihgru",
+  storageBucket: "fzhiuezhyegzihgru.firebasestorage.app",
+  messagingSenderId: "510923038611",
+  appId: "1:510923038611:web:806b3723621c7624bdd266",
+  measurementId: "G-MMRT205BST"
+};
+
+const app = initializeApp(firebaseConfig);
+const database = getDatabase(app);
+const messagesRef = ref(database, 'messages');
+let lastClickedTime = 0;
+const cooldownTime = 5000;
+let unreadMessagesCount = 0;
+let messagesPerPage = 20;
+let currentPage = 1;
+
+window.onload = () => {
+    const savedName = localStorage.getItem("name");
+    if (savedName) {
+        document.getElementById("name").value = savedName;
+    }
+
+    const savedBgUrl = localStorage.getItem("bgurl");
+    if (savedBgUrl) {
+        document.body.style.backgroundImage = `url(${savedBgUrl})`;
+    }
+
+    const savedPing = localStorage.getItem("customPing");
+    if (savedPing) {
+        const notificationSound = document.getElementById('notification-sound');
+        notificationSound.src = savedPing;
+    }
+
+    loadMessages(currentPage);
+};
+
+document.getElementById('message-form').addEventListener('submit', submitForm);
+document.getElementById('greg-button').addEventListener('click', postGregMessage);
+document.getElementById('save-name-button').addEventListener('click', saveName);
+document.getElementById('page-number').addEventListener('input', changePage);
+document.getElementById('customization').addEventListener('submit', function (e) {
+    e.preventDefault();
+
+    const bgUrl = document.getElementById('bgurl').value;
+    if (bgUrl) {
+        localStorage.setItem("bgurl", bgUrl);
+        document.body.style.backgroundImage = `url(${bgUrl})`;
+    } else {
+        document.body.style.backgroundImage = '';
+        localStorage.removeItem("bgurl");
+    }
+
+    const fileInput = document.getElementById('fileUpload');
+    if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+        reader.onloadend = function () {
+            const base64File = reader.result;
+            localStorage.setItem("customPing", base64File);
+            const notificationSound = document.getElementById('notification-sound');
+            notificationSound.src = base64File;
+        };
+        reader.readAsDataURL(file);
+    }
+});
+
+document.getElementById('clearcustomping').addEventListener('click', function () {
+    localStorage.removeItem("customPing");
+    document.getElementById('notification-sound').src = 'DING.WAV';
+});
+
+function submitForm(e) {
+    e.preventDefault();
+
+    const savedName = localStorage.getItem("name");
+    if (savedName) {
+        document.getElementById("name").value = savedName;
+    }
+
+    if (isCooldownActive()) {
+        alert('be patient.');
+        return;
+    }
+
+    let name = document.getElementById('name').value;
+    let message = document.getElementById('message').value;
+
+    name = sanitizeInput(name);
+    message = sanitizeInput(message);
+
+    message = processImageUrls(message);
+    message = processTextDecoration(message);
+
+    saveMessage(name, message);
+    document.getElementById('message').value = ''; 
+    lastClickedTime = Date.now();
+}
+
+function processImageUrls(message) {
+    const imageUrlRegex = /(https?:\/\/[^\s]+(\.(?:png|jpg|jpeg|gif|bmp|webp)))\b/g;
+    const imageUrls = [...message.matchAll(imageUrlRegex)];
+
+    if (imageUrls.length > 0) {
+        const firstImageUrl = imageUrls[0][0];
+        message = message.replace(firstImageUrl, `<img src="${firstImageUrl}" style="max-width: 256px; max-height: 256px;"/>`);
+    }
+
+    return message;
+}
+
+function processTextDecoration(message) {
+    message = message.replace(/\*\*(.*?)\*\*/g, '<b>$1</b>');
+    message = message.replace(/\*(.*?)\*/g, '<i>$1</i>');
+    message = message.replace(/\*\*\*(.*?)\*\*\*/g, '<b><i>$1</i></b>');
+    return message;
+}
+
+function postGregMessage() {
+    if (isCooldownActive()) {
+        alert('be patient.');
+        return;
+    }
+    saveMessage("button pushed", "greg");
+    lastClickedTime = Date.now();
+}
+
+function isCooldownActive() {
+    return Date.now() - lastClickedTime < cooldownTime;
+}
+
+function saveMessage(name, message) {
+    const timestamp = Date.now();
+    const newMessageRef = push(messagesRef);
+    set(newMessageRef, {
+        name: name,
+        message: message,
+        likes: 0,
+        timestamp: timestamp
+    }).catch((error) => {
+        console.error("Error saving message:", error);
+    });
+}
+
+let lastMessageTimestamp = 0;
+
+function loadMessages(page) {
+    const startAtMessage = (page - 1) * messagesPerPage;
+    onValue(messagesRef, (snapshot) => {
+        const messages = snapshot.val();
+        let output = '';
+        if (messages) {
+            const messageArray = Object.keys(messages).map(id => ({
+                id,
+                name: messages[id].name,
+                message: messages[id].message,
+                likes: messages[id].likes,
+                timestamp: messages[id].timestamp
+            }));
+
+            const latestMessage = messageArray[messageArray.length - 1]; 
+            if (latestMessage && latestMessage.timestamp > lastMessageTimestamp) {
+                if (!document.hasFocus()) {
+                    unreadMessagesCount++;
+                    updateDocumentTitle(unreadMessagesCount);
+                    updateFavicon(unreadMessagesCount);
+                    playNotificationSound();
+                }
+                lastMessageTimestamp = latestMessage.timestamp;
+            }
+
+            const messagesToShow = messageArray.reverse().slice(startAtMessage, startAtMessage + messagesPerPage);
+            messagesToShow.forEach(msg => {
+                let likeButtonHTML = '';
+                if (msg.likes !== undefined) {
+                    likeButtonHTML = `<button id="like-button-${msg.id}" class="like-button">${msg.likes} Likes</button>`;
+                }
+
+                const timeAgo = getTimeAgo(msg.timestamp);
+                output += `<li><strong>${msg.name}:</strong> ${msg.message} ${likeButtonHTML} ${timeAgo ? `<span class="timestamp">${timeAgo}</span>` : ''}</li>`;
+            });
+
+            document.getElementById('messages').innerHTML = output;
+            messagesToShow.forEach(msg => {
+                if (msg.likes !== undefined) {
+                    const likeButton = document.getElementById(`like-button-${msg.id}`);
+                    if (likeButton) {
+                        likeButton.addEventListener('click', () => likeMessage(msg.id, msg.likes));
+                        checkIfLiked(msg.id, likeButton);
+                    }
+                }
+            });
+
+            setPageNumbers(messageArray.length);
+        }
+    });
+}
+
+function getTimeAgo(timestamp) {
+    if (isNaN(timestamp)) return '';
+    const currentTime = Date.now();
+    const diff = currentTime - timestamp;
+    
+    if (diff < 60000) {
+        return "Posted just now";
+    } else if (diff < 3600000) {
+        return `Posted ${Math.floor(diff / 60000)} minutes ago`;
+    } else if (diff < 86400000) {
+        return `Posted ${Math.floor(diff / 3600000)} hours ago`;
+    } else {
+        return `Posted ${Math.floor(diff / 86400000)} days ago`;
+    }
+}
+
+function setPageNumbers(totalMessages) {
+    const totalPages = Math.ceil(totalMessages / messagesPerPage);
+    const pageNumbersContainer = document.getElementById('page-numbers');
+    pageNumbersContainer.innerHTML = '';
+
+    for (let i = 1; i <= Math.min(10, totalPages); i++) {
+        const pageButton = document.createElement('p');
+        pageButton.textContent = i;
+        pageButton.classList.add('page-button');
+        pageButton.onclick = () => {
+            currentPage = i;
+            loadMessages(currentPage);
+        };
+        pageNumbersContainer.appendChild(pageButton);
+    }
+
+    document.getElementById('page-number').max = totalPages;
+    document.getElementById('page-number').value = currentPage;
+}
+
+function playNotificationSound() {
+    const notificationSound = document.getElementById('notification-sound');
+    notificationSound.play().catch(error => console.error("Error playing sound:", error));
+}
+
+function updateDocumentTitle(count) {
+    document.title = `(${count}) AMAZING NAME`;
+}
+
+window.addEventListener('focus', resetUnreadMessagesCount);
+
+function resetUnreadMessagesCount() {
+    unreadMessagesCount = 0;
+    document.title = 'AMAZING NAME';
+}
+
+function likeMessage(messageId, currentLikes) {
+    if (!localStorage.getItem(`liked-${messageId}`)) {
+        const messageRef = ref(database, `messages/${messageId}`);
+        update(messageRef, {
+            likes: currentLikes + 1
+        }).then(() => {
+            localStorage.setItem(`liked-${messageId}`, true);
+            document.getElementById(`like-button-${messageId}`).textContent = `${currentLikes + 1} Likes`;
+        }).catch((error) => {
+            console.error("Error liking message:", error);
+        });
+    }
+}
+
+function checkIfLiked(messageId, likeButton) {
+    if (localStorage.getItem(`liked-${messageId}`)) {
+        likeButton.disabled = true;
+        likeButton.textContent = `Liked`;
+    }
+}
+
+function saveName() {
+    let name = document.getElementById("name").value;
+    name = sanitizeInput(name);
+    localStorage.setItem("name", name);
+    document.getElementById("name").value = name; 
+    alert("suces");
+}
+
+function sanitizeInput(input) {
+    return input.replace(/[<>]/g, ''); 
+}
+
+function changePage(e) {
+    const pageNumber = parseInt(e.target.value);
+    if (pageNumber > 0 && pageNumber <= 10) {
+        currentPage = pageNumber;
+        loadMessages(currentPage);
+    }
+}
+
+document.getElementById('name').addEventListener('keydown', function(e) {
+    const forbiddenKeys = ['<', '>'];
+    if (forbiddenKeys.includes(e.key)) {
+        e.preventDefault();
+    }
+});
+    </script>
+    <script src="notificon.js"></script>
+    <style>
+        body {
+            font-family: 'Comic Sans MS';
+        }
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: #1f1f1f;
+                color: white;
+            }
+            .page-button {
+                background-color: black;
+            }
+        }
+
+        .page-button {
+            cursor: pointer;
+            display: inline-block;
+            margin: 5px;
+            padding: 5px;
+        }
+.FIX-IT {
+margin-top: 10px;
+margin-bottom: 10px;
+display: flex;
+flex-direction: row;
+}
+.FIX-IT button {
+margin-left: 5px;
+}
+.timestamp {
+    color: #999; 
+    font-size: 0.9em;
+    margin-left: 10px;
+}
+    </style>
+    
+</head>
+<body>
+    <h1>AMAZING NAME</h1>
+    <p>VERSION 9</p>
+    <button onclick="location.href='rules.html';">rules/instructions (PLEASE READ)</button>
+    <form id="message-form">
+<div class="FIX-IT">
+        <input type="text" id="name" maxlength="15" placeholder="your name dawg" required><br>
+        <button type="button" id="save-name-button">save</button><br>
+</div>
+        <textarea id="message" maxlength="212" placeholder="text" required></textarea><br>
+<div>
+        <button type="submit">Send your masterpiece</button>
+    <button id="greg-button">greg</button>
+</div>
+    </form>
+    <ul id="messages"></ul>
+    <div>
+        <div id="page-numbers"></div>
+        <input type="number" id="page-number" value="${currentPage}" min="1">
+    </div>
+<p>customization</p>
+<form id="customization">
+<input id="bgurl" placeholder="background url (leave blank for default colors)">
+<div style="display: flex; flex-direction: column;">
+<label for="fileUpload">choose file for custom ping</label>
+        <input type="file" id="fileUpload" name="fileUpload">
+</div>
+<div style="margin-top: 10px;">
+<button type="submit">save customizations</button>
+<button type="button" id="clearcustomping">clear custom ping</button>
+</div>
+</form>
+</body>
+</html>
